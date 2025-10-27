@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Signals — 100U × 25 (TP1/2/3)</title>
+  <link rel="stylesheet" href="./assets/style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">TB</div>
+      <div class="brand-text">
+        <div class="title">TITAN-STYLE</div>
+        <div class="subtitle">Signals (Demo)</div>
+      </div>
+    </div>
+    <nav>
+      <a class="active">Signals</a>
+      <a href="https://github.com" target="_blank" rel="noreferrer">GitHub</a>
+    </nav>
+  </aside>
+
+  <main class="content">
+    <div class="bar">
+      <div class="inputs">
+        <label>Exchange
+          <select id="exSel">
+            <option value="binance" selected>binance</option>
+            <option value="bybit">bybit</option>
+            <option value="cryptocompare">cryptocompare</option>
+          </select>
+        </label>
+        <label>Symbol
+          <select id="symSel">
+            <option>BTCUSDT</option>
+            <option>ETHUSDT</option>
+            <option>SOLUSDT</option>
+          </select>
+        </label>
+        <label>TF
+          <select id="tfSel">
+            <option>15m</option>
+            <option selected>1h</option>
+            <option>4h</option>
+          </select>
+        </label>
+        <button id="refreshBtn">Refresh</button>
+        <button id="autoBtn">Auto: OFF</button>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="k">Active</div><div id="activeCount" class="v">0</div></div>
+        <div class="stat"><div class="k">Done</div><div id="doneCount" class="v">0</div></div>
+        <div class="stat"><div class="k">Buy</div><div id="buyCount" class="v">0</div></div>
+        <div class="stat"><div class="k">Sell</div><div id="sellCount" class="v">0</div></div>
+        <div class="stat"><div class="k">WR</div><div id="wr" class="v">0%</div></div>
+      </div>
+    </div>
+
+    <div class="notice">
+      <b>Signal Expiration:</b> nếu trong khung thời gian chỉ định không chạm TP/SL thì hết hạn (EXPIRED).<br/>
+      <b>Trade Duration:</b> khi chạm <b>TP1</b> là tính thắng; phần còn lại có thể chạy tới TP2/TP3.<br/>
+      Nguyên tắc: <i>Cắt lỗ sớm</i> (SL/expiration) và <i>để lãi chạy</i> (sau TP).
+    </div>
+
+    <section id="cards" class="cards"></section>
+
+    <footer class="foot">Demo tĩnh — dữ liệu từ public endpoints. Không phải lời khuyên đầu tư.</footer>
+  </main>
+
+  <script src="./js/config.js"></script>
+  <script src="./js/chart.js"></script>
+  <script src="./js/ui.js"></script>
+</body>
+</html>
