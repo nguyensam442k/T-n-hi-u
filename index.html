@@ -1,48 +1,26 @@
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Danny Signals — 15m, 100U×25</title>
-  <link rel="stylesheet" href="./assets/style.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-</head>
-<body>
-  <main class="wrap">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">DN</div>
-        <div>
-          <div class="title">Danny Signals</div>
-          <div class="sub">15m • 100U×25 • Binance</div>
-        </div>
-      </div>
-      <div class="actions">
-        <button id="refreshBtn" class="btn">Refresh</button>
-      </div>
-    </header>
+<!-- ... giữ nguyên phần trên ... -->
 
-    <!-- SUMMARY -->
-    <section class="summary">
-      <div class="tile"><div class="k">Total</div><div id="sumTotal" class="v">0</div></div>
-      <div class="tile"><div class="k">Win (TP)</div><div id="sumWin" class="v">0</div></div>
-      <div class="tile"><div class="k">Loss (SL)</div><div id="sumLoss" class="v">0</div></div>
-      <div class="tile"><div class="k">Expired</div><div id="sumExp" class="v">0</div></div>
-      <div class="tile"><div class="k">WR%</div><div id="sumWR" class="v">0%</div></div>
-      <div class="tile"><div class="k">Avg RR</div><div id="sumRR" class="v">0.00</div></div>
-      <div class="tile"><div class="k">Total PnL (25x)</div><div id="sumPnL" class="v">+$0.00</div></div>
-    </section>
+<section id="cards" class="cards"></section>
 
-    <!-- SIGNAL CARDS -->
-    <section id="cards" class="cards"></section>
+<!-- ===== Order Log / Journal ===== -->
+<section id="orderLog" class="log">
+  <h3>Order Log (Journal)</h3>
+  <div id="logSummary" class="log-summary"></div>
+  <div class="log-table-wrap">
+    <table id="logTable">
+      <thead>
+        <tr>
+          <th>Time</th><th>Symbol</th><th>Side</th><th>Conf</th>
+          <th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th>
+          <th>Status</th><th>Exit</th><th>PnL (25x)</th><th>RR</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
 
-    <footer class="foot">Demo tĩnh • Nguồn giá: CryptoCompare (CCCAGG) • Không phải lời khuyên đầu tư.</footer>
-  </main>
+<footer class="foot">Demo tĩnh • Nguồn giá: CryptoCompare (CCCAGG) • Không phải lời khuyên đầu tư.</footer>
 
-  <!-- thêm version để tránh cache -->
-  <script src="./js/config.js?v=4"></script>
-  <script src="./js/ui.js?v=4"></script>
-</body>
-</html>
+<script src="./js/config.js?v=6"></script>
+<script src="./js/ui.js?v=6"></script>
