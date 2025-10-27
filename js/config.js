@@ -1,4 +1,4 @@
-// Cấu hình cố định: 1 nguồn (Binance), 3 symbol, TF 15m
+// Cấu hình: 1 nguồn (Binance), 3 symbol, TF 15m
 window.App = {
   CONFIG: {
     symbols: ['BTCUSDT','ETHUSDT','SOLUSDT'],
