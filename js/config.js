@@ -1,13 +1,44 @@
-// Danny Signals — CryptoCompare minute paging -> 15m resample (no `this`)
-(function () {
+// Danny Signals — 15m ICT/SMC + EMA21 + Stoch + MACD (CCCAGG)
+(function(){
   const CONFIG = {
     symbols: ['BTCUSDT','ETHUSDT','SOLUSDT'],
     timeframe: '15m',
-    candlesLimit: 450,                         // số 15m bars cần hiển thị
-    risk: { perTradeUSD: 100, leverage: 25 },  // 100u x 25
-    tpSplit: [0.30,0.30,0.40],                 // chia TP
-    tpR: [0.8,1.4,2.0],                        // RR cho TP1/2/3
-    ema: [21,50,200], rsiPeriod: 14, stoch:[14,3], atr:14,
+    candlesLimit: 600,                       // đủ dài để tính MACD/EMA/FVG
+    risk: { perTradeUSD: 100, leverage: 25 },
+
+    // chế độ
+    mode: 'live',                            // 'live' | 'backtest'
+    useBinanceWS: true,                      // WS chỉ để cập nhật CURRENT/PnL
+
+    // chỉ số lõi/filters
+    ema21: 21,
+    atr: 14,
+
+    // ==== ICT / SMC ====
+    ict: {
+      swingLen: 3,
+      structureLookback: 120,
+      bosTolerance: 0.0005,
+      useFVG: true,  fvgLookback: 40,
+      useOB:  true,  obLookback: 30,
+      entryMode: 'mitigation',       // 'mitigation' 50% vùng | 'touch'
+      allowSweepEntry: true,
+      retestBarsMax: 20
+    },
+
+    // Filters phụ
+    stoch: { k:14, d:3, smooth:3, buyZone:[20,60], sellZone:[40,80] },
+    macd:  { fast:12, slow:26, sig:9 },      // dùng histogram xác nhận/quản trị
+    filters: {
+      useEMA:true, useStoch:true, useMACD:true,
+      maxDistATR21: 1.2                     // tránh đuổi giá
+    },
+
+    // Risk/RR/expiry
+    slATR: 1.2,
+    tpR: [1.0, 1.8, 2.6],
+    tpSplit: [0.30,0.30,0.40],
+    expiryBars15m: 20
   };
 
   // ===== DEBUG banner =====
@@ -23,10 +54,9 @@
     console.warn('DEBUG:', msg);
   }
 
-  // ===== Data from CryptoCompare =====
+  // ===== Data from CryptoCompare (minutes -> 15m) =====
   const ccBase = 'https://min-api.cryptocompare.com/data';
 
-  // Tải dữ liệu 1-minute theo trang (tối đa ~2000/lần), có thể thêm API key nếu có.
   async function fetchMinutesPaged(symbol, minutesNeeded){
     const fsym = symbol.replace(/USDT$/,'');
     const tsym = 'USDT';
@@ -40,57 +70,55 @@
       const r = await fetch(url);
       if(!r.ok) throw new Error('CC ' + r.status);
       const j = await r.json();
-      if(j.Response === 'Error') throw new Error(j.Message || 'CC error');
+      if(j.Response==='Error') throw new Error(j.Message||'CC error');
 
       const arr = (j.Data && (j.Data.Data || j.Data)) || [];
       if(!arr.length) break;
 
-      if(toTs === undefined) data.push(...arr);
-      else data.unshift(...arr);
-
+      if(toTs===undefined) data.push(...arr); else data.unshift(...arr);
       toTs = arr[0].time - 1;
       if(data.length >= minutesNeeded) break;
     }
-
     return data.map(k=>({ t:k.time*1000, o:+k.open, h:+k.high, l:+k.low, c:+k.close, v:+(k.volumefrom||0) }));
   }
 
-  function resampleTo15m(mins){
-    const buckets = new Map(); // key: epoch aligned 15m
-    for(const m of mins){
-      const sec = Math.floor(m.t/1000);
-      const b = Math.floor(sec/900)*900; // 900s = 15m
-      const k = b*1000;
-      const cur = buckets.get(k);
-      if(!cur) buckets.set(k,{t:k,o:m.o,h:m.h,l:m.l,c:m.c,v:m.v});
-      else { cur.h=Math.max(cur.h,m.h); cur.l=Math.min(cur.l,m.l); cur.c=m.c; cur.v+=m.v; }
+  function resample15(mins){
+    const m = new Map();
+    for(const x of mins){
+      const sec = Math.floor(x.t/1000), b = Math.floor(sec/900)*900, k=b*1000;
+      const cur = m.get(k);
+      if(!cur) m.set(k,{t:k,o:x.o,h:x.h,l:x.l,c:x.c,v:x.v});
+      else { cur.h=Math.max(cur.h,x.h); cur.l=Math.min(cur.l,x.l); cur.c=x.c; cur.v+=x.v; }
     }
-    return Array.from(buckets.values()).sort((a,b)=>a.t-b.t);
+    return Array.from(m.values()).sort((a,b)=>a.t-b.t);
   }
 
-  // trả về mảng 15m bars đủ dài
-  async function getKlines(symbol, interval='15m', limit15m=450){
-    if(interval!=='15m') throw new Error('Only 15m supported in this demo');
-    const warmup = 60; // thừa để tính EMA200
-    const minutesNeeded = (limit15m + warmup) * 15;
-    const mins = await fetchMinutesPaged(symbol, minutesNeeded);
+  async function getKlines(symbol, interval='15m', limit15=600){
+    if(interval!=='15m') throw new Error('Only 15m supported');
+    const warm = 80;                         // cho MACD/EMA/FVG
+    const need = (limit15 + warm) * 15;
+    const mins = await fetchMinutesPaged(symbol, need);
     showError(`OK CC ${symbol}: minutes=${mins.length}`);
-    if(mins.length < 300) throw new Error('Too few minute bars from CC');
-
-    const m15 = resampleTo15m(mins);
-    return m15.slice(-limit15m);
+    const m15  = resample15(mins);
+    return m15.slice(-limit15);
   }
 
   // ===== Indicators =====
-  function SMA(a, n){ const o=[]; let s=0; for(let i=0;i<a.length;i++){ s+=a[i]; if(i>=n) s-=a[i-n]; o.push(i>=n-1?s/n:null);} return o; }
-  function EMA(a, n){ const k=2/(n+1), o=[]; let p=null; for(let i=0;i<a.length;i++){ const v=a[i]; p=(p===null?v:v*k+p*(1-k)); o.push(p);} return o; }
-  function RSI(c, p=14){ const r=Array(c.length).fill(null); let g=0,l=0; for(let i=1;i<=p;i++){ const d=c[i]-c[i-1]; g+=Math.max(d,0); l+=Math.max(-d,0);} let G=g/p, L=l/p; r[p]=100-100/(1+(L===0?100:G/L)); for(let i=p+1;i<c.length;i++){ const d=c[i]-c[i-1]; G=(G*(p-1)+Math.max(d,0))/p; L=(L*(p-1)+Math.max(-d,0))/p; const RS=L===0?100:G/L; r[i]=100-100/(1+RS);} return r; }
-  function Stoch(H,L,C,p=14,s=3){ const K=[]; for(let i=0;i<C.length;i++){ const a=Math.max(0,i-p+1), hh=Math.max(...H.slice(a,i+1)), ll=Math.min(...L.slice(a,i+1)); K[i]=(hh===ll)?50:((C[i]-ll)/(hh-ll))*100 } const D=SMA(K,s); return {k:K,d:D}; }
-  function ATR(H,L,C,p=14){ const tr=[null]; for(let i=1;i<C.length;i++){ const hl=H[i]-L[i], hc=Math.abs(H[i]-C[i-1]), lc=Math.abs(L[i]-C[i-1]); tr[i]=Math.max(hl,hc,lc);} const a=SMA(tr.slice(1),p); a.unshift(null); return a; }
+  const SMA=(a,n)=>{const o=[];let s=0;for(let i=0;i<a.length;i++){s+=a[i];if(i>=n)s-=a[i-n];o.push(i>=n-1?s/n:null)}return o;}
+  const EMA=(a,n)=>{const k=2/(n+1),o=[];let p=null;for(let i=0;i<a.length;i++){const v=a[i];p=(p===null?v:v*k+p*(1-k));o.push(p)}return o;}
+  function RSI(c,p=14){const r=Array(c.length).fill(null);let g=0,l=0;for(let i=1;i<=p;i++){const d=c[i]-c[i-1];g+=Math.max(d,0);l+=Math.max(-d,0)}let G=g/p,L=l/p;r[p]=100-100/(1+(L===0?100:G/L));for(let i=p+1;i<c.length;i++){const d=c[i]-c[i-1];G=(G*(p-1)+Math.max(d,0))/p;L=(L*(p-1)+Math.max(-d,0))/p;const RS=L===0?100:G/L;r[i]=100-100/(1+RS)}return r;}
+  function Stoch(H,L,C,k=14,d=3,s=3){const K=[];for(let i=0;i<C.length;i++){const a=Math.max(0,i-k+1),hh=Math.max(...H.slice(a,i+1)),ll=Math.min(...L.slice(a,i+1));K[i]=(hh===ll)?50:((C[i]-ll)/(hh-ll))*100}const KD=SMA(K,d);const KD2=SMA(KD.slice(0),s);return {k:K,d:KD2};}
+  function ATR(H,L,C,p=14){const tr=[null];for(let i=1;i<C.length;i++){const hl=H[i]-L[i],hc=Math.abs(H[i]-C[i-1]),lc=Math.abs(L[i]-C[i-1]);tr[i]=Math.max(hl,hc,lc)}const a=SMA(tr.slice(1),p);a.unshift(null);return a;}
+  function MACD(c,fast=12,slow=26,sig=9){
+    const emaF=EMA(c,fast), emaS=EMA(c,slow);
+    const macd=c.map((_,i)=> (emaF[i]!=null&&emaS[i]!=null)? emaF[i]-emaS[i] : null);
+    const signal=EMA(macd.map(x=>x??0),sig);
+    const hist=macd.map((x,i)=> (x==null||signal[i]==null)? null : x-signal[i]);
+    return {macd,signal,hist};
+  }
 
-  function expiryBars(){ return 16 } // 4h trên khung 15m
+  function expiryBars(){ return CONFIG.expiryBars15m || 20 }
   const fmt2 = (x)=> (Math.round(x*100)/100).toFixed(2);
 
-  // expose
-  window.App = { CONFIG, showError, getKlines, SMA, EMA, RSI, Stoch, ATR, expiryBars, fmt2 };
+  window.App = { CONFIG, showError, getKlines, SMA, EMA, RSI, Stoch, ATR, MACD, expiryBars, fmt2 };
 })();
