@@ -13,7 +13,7 @@
     } catch(e){}
   }
 
-  // ====== Strategy m15 ======
+  // ====== Strategy m15 (điều kiện mềm hơn) ======
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]), e200=EMA(C, CONFIG.ema[2]);
@@ -22,27 +22,54 @@
     const atr=ATR(H,L,C, CONFIG.atr);
 
     const out=[];
-    const start = Math.max(200, CONFIG.ema[2]); // đảm bảo đủ warmup EMA200
+    const start = Math.max(200, CONFIG.ema[2]); // đủ warmup EMA200
+
     for(let i=start;i<bars.length;i++){
       const up = e21[i]>e50[i] && e50[i]>e200[i];
       const dn = e21[i]<e50[i] && e50[i]<e200[i];
-      const crossUp   = K[i-1]!=null && D[i-1]!=null && K[i-1]<D[i-1] && K[i]>=D[i] && K[i]<60;
-      const crossDown = K[i-1]!=null && D[i-1]!=null && K[i-1]>D[i-1] && K[i]<=D[i] && K[i]>40;
 
-      if( (up && rsi[i]>52) || crossUp ){
+      // Cross stoch “mềm” + RSI xác nhận (hạ ngưỡng)
+      const crossUp   = K[i-1]!=null && D[i-1]!=null && K[i-1]<D[i-1] && K[i]>=D[i] && K[i]<70;
+      const crossDown = K[i-1]!=null && D[i-1]!=null && K[i-1]>D[i-1] && K[i]<=D[i] && K[i]>30;
+
+      // Thêm điều kiện “điểm vào cơ bản”: close vượt EMA21 theo xu hướng
+      const basicUp   = up && C[i]>e21[i] && rsi[i]>50;
+      const basicDown = dn && C[i]<e21[i] && rsi[i]<50;
+
+      if( (up && rsi[i]>52) || crossUp || basicUp ){
         const e=bars[i].c, stop=Math.max(bars[i].l - 0.6*atr[i], bars[i].l*0.998);
-        const risk=e-stop; const tp=[e+0.8*risk, e+1.4*risk, e+2*risk];
-        const conf=Math.min(100, Math.round((up?40:15) + Math.max(0,rsi[i]-50) + (crossUp?20:0)));
+        const risk=Math.max( e-stop, 1e-8 );
+        const tp=[e+0.8*risk, e+1.4*risk, e+2*risk];
+        const conf=Math.min(100, Math.round((up?45:20) + Math.max(0,rsi[i]-50) + (crossUp?15:0) + (basicUp?10:0)));
         out.push({i, side:'BUY', entry:e, sl:stop, tp, conf});
       }
-      if( (dn && rsi[i]<48) || crossDown ){
+      if( (dn && rsi[i]<48) || crossDown || basicDown ){
         const e=bars[i].c, stop=Math.min(bars[i].h + 0.6*atr[i], bars[i].h*1.002);
-        const risk=stop-e; const tp=[e-0.8*risk, e-1.4*risk, e-2*risk];
-        const conf=Math.min(100, Math.round((dn?40:15) + Math.max(0,50-rsi[i]) + (crossDown?20:0)));
+        const risk=Math.max( stop-e, 1e-8 );
+        const tp=[e-0.8*risk, e-1.4*risk, e-2*risk];
+        const conf=Math.min(100, Math.round((dn?45:20) + Math.max(0,50-rsi[i]) + (crossDown?15:0) + (basicDown?10:0)));
         out.push({i, side:'SELL', entry:e, sl:stop, tp, conf});
       }
     }
+
     return out;
+  }
+
+  // ====== Fallback: nếu không có kèo nào, tạo 1 kèo tại nến cuối ======
+  function fallbackSignal(bars){
+    const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
+    const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]);
+    const rsi=RSI(C, CONFIG.rsiPeriod);
+    const atr=ATR(H,L,C, CONFIG.atr);
+    const i = bars.length-1;
+    const side = (e21[i] >= e50[i] && rsi[i]>=50) ? 'BUY' : 'SELL';
+    const e = bars[i].c;
+    const stop = side==='BUY'
+      ? Math.max(bars[i].l - 0.6*atr[i], bars[i].l*0.998)
+      : Math.min(bars[i].h + 0.6*atr[i], bars[i].h*1.002);
+    const risk = Math.max( (side==='BUY' ? e - stop : stop - e), 1e-8 );
+    const tp = side==='BUY' ? [e+0.8*risk, e+1.4*risk, e+2*risk] : [e-0.8*risk, e-1.4*risk, e-2*risk];
+    return {i, side, entry:e, sl:stop, tp, conf:55};
   }
 
   // ====== Backtest ngắn hạn cho 1 lệnh ======
@@ -93,19 +120,24 @@
       }
 
       const card = document.createElement('div'); card.className='card';
+
       if(!bars || !bars.length){
         card.innerHTML = `<div class="head"><div class="asset"><div class="sym">${sym.replace('USDT','')}</div><span class="badge">m15</span></div><div class="badge">Data error</div></div><div style="color:#93a4bf">Không tải được dữ liệu cho ${sym}. Thử Refresh sau ít phút.</div>`;
         cards.appendChild(card); continue;
       }
 
-      const latest = sigs.length ? sigs[sigs.length-1] : null;
+      // lấy kèo mới nhất; nếu không có → fallback tại nến cuối
+      const latest = sigs.length ? sigs[sigs.length-1] : fallbackSignal(bars);
+
+      // alert nếu có kèo mới (so với lần trước)
       if (latest && LAST_SEEN[sym] !== latest.i) {
         if (LAST_SEEN[sym] !== undefined) alertSignal(sym, latest);
         LAST_SEEN[sym] = latest.i;
       }
 
-      const recent = sigs.slice(-30);
-      for(const s of recent){
+      // thống kê (tối đa 30 kèo gần nhất; nếu không có kèo nào thì backtest kèo fallback để có số liệu)
+      const recList = sigs.length ? sigs.slice(-30) : [latest];
+      for(const s of recList){
         const sr = simulate(s, bars);
         total++;
         if(sr.status==='TP'){ win++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++; }
@@ -115,11 +147,6 @@
 
       const s = latest;
       const last = bars[bars.length-1].c;
-      if(!s){
-        card.innerHTML = `<div class="head"><div class="asset"><div class="sym">${sym.replace('USDT','')}</div><span class="badge">m15</span></div><div class="badge">Last: $${fmt2(last)}</div></div><div style="color:#93a4bf">Không có tín hiệu gần đây.</div>`;
-        cards.appendChild(card); continue;
-      }
-
       const r = simulate(s, bars);
       const pnlPct = ((last - s.entry) / s.entry) * (s.side==='BUY'?100:-100);
       const pnlTag = r.pnl>=0 ? 'pct-pos' : 'pct-neg';
