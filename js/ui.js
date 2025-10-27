@@ -1,13 +1,13 @@
 (function(){
   const {CONFIG, getKlines, EMA, RSI, Stoch, ATR, expiryBars, fmt2} = window.App;
 
-  // Rule đơn giản, “dễ nổ” để luôn có tín hiệu:
-  // BUY: EMA21>EMA50>EMA200 & RSI>52  OR  Stoch K cắt lên D dưới 60
-  // SELL: EMA21<EMA50<EMA200 & RSI<48  OR  Stoch K cắt xuống D trên 40
+  // Rule: BUY/SELL theo EMA stack + RSI + Stoch cross (như bản trước)
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]), e200=EMA(C, CONFIG.ema[2]);
-    const rsi=RSI(C, CONFIG.rsiPeriod); const {k:K,d:D}=Stoch(H,L,C, CONFIG.stoch?.[0]||14, CONFIG.stoch?.[1]||3);
+    const rsi=(window.App.RSI||(()=>[]))(C, CONFIG.rsiPeriod);
+    const st = Stoch(H,L,C, CONFIG.stoch?.[0]||14, CONFIG.stoch?.[1]||3);
+    const K=st.k, D=st.d;
     const atr=ATR(H,L,C, CONFIG.atr);
 
     const out=[];
@@ -33,42 +33,61 @@
     return out;
   }
 
+  // mô phỏng: trả về TP / SL / EXPIRED + PnL + RR thực tế
   function simulate(s, bars){
     const qty = (CONFIG.risk.perTradeUSD * CONFIG.risk.leverage) / s.entry; // 100×25
     const eBars = expiryBars();
-    let hit=[0,0,0], when=s.i, status='ACTIVE', pnl=0;
+    const riskAbs = Math.abs((s.side==='BUY' ? (s.entry - s.sl) : (s.sl - s.entry)) * qty);
+
+    let hit=[0,0,0], when=s.i;
 
     for(let j=s.i+1;j<bars.length && j<=s.i+eBars;j++){
       const b=bars[j]; when=j;
       if(s.side==='BUY'){
-        if(b.l<=s.sl){ status='SL'; pnl=(s.sl-s.entry)*qty; return {status,when,qty,pnl,filled:hit}; }
+        if(b.l<=s.sl) return {status:'SL', when, qty, pnl:-riskAbs, rr:-1, filled:hit};
         if(!hit[0]&&b.h>=s.tp[0]) hit[0]=1;
         if(!hit[1]&&b.h>=s.tp[1]) hit[1]=1;
         if(!hit[2]&&b.h>=s.tp[2]) hit[2]=1;
       } else {
-        if(b.h>=s.sl){ status='SL'; pnl=(s.entry-s.sl)*qty; return {status,when,qty,pnl,filled:hit}; }
+        if(b.h>=s.sl) return {status:'SL', when, qty, pnl:-riskAbs, rr:-1, filled:hit};
         if(!hit[0]&&b.l<=s.tp[0]) hit[0]=1;
         if(!hit[1]&&b.l<=s.tp[1]) hit[1]=1;
         if(!hit[2]&&b.l<=s.tp[2]) hit[2]=1;
       }
       if(hit[2]||hit[1]||hit[0]){
-        const w=[0.30,0.30,0.40]; pnl=0;
+        const w=[0.30,0.30,0.40];
+        let pnl=0;
         for(let k=0;k<3;k++) if(hit[k]) pnl += (s.side==='BUY'?(s.tp[k]-s.entry):(s.entry-s.tp[k]))*qty*w[k];
-        return {status:'TP', when, qty, pnl, filled:hit};
+        const rr = riskAbs>0 ? pnl / riskAbs : 0;
+        return {status:'TP', when, qty, pnl, rr, filled:hit};
       }
     }
-    // vẫn active tới khi hết hạn
-    const px = bars[Math.min(s.i+eBars, bars.length-1)].c;
-    pnl = (s.side==='BUY'?(px-s.entry):(s.entry-px))*qty;
-    return {status:'ACTIVE', when, qty, pnl, filled:hit};
+    // HẾT HẠN
+    return {status:'EXPIRED', when:Math.min(s.i+eBars,bars.length-1), qty, pnl:0, rr:0, filled:hit};
   }
 
   async function build(){
     const cards = document.getElementById('cards');
     cards.innerHTML = '';
+
+    // summary counters
+    let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0;
+
     for(const sym of CONFIG.symbols){
       const bars = await getKlines(sym, CONFIG.timeframe, CONFIG.candlesLimit);
       const sigs = generateSignals(bars);
+
+      // ====== thống kê từ các tín hiệu gần đây (lấy ~30 cái cuối)
+      const recent = sigs.slice(-30);
+      for(const s of recent){
+        const sr = simulate(s, bars);
+        total++;
+        if(sr.status==='TP'){ win++; rrSum+=sr.rr; rrN++; }
+        else if(sr.status==='SL'){ loss++; rrSum+=sr.rr; rrN++; }
+        else { exp++; }
+      }
+
+      // ====== hiển thị CARD bằng tín hiệu mới nhất
       const s = sigs.length ? sigs[sigs.length-1] : null;
       const last = bars[bars.length-1].c;
 
@@ -98,9 +117,9 @@
         </div>
 
         <div class="row">
-          <div class="sl">▼ SL $${fmt2(s.sl)}</div>
           <div class="${s.side==='BUY'?'side-buy':'side-sell'}">SIDE ${s.side}</div>
           <div>CONF ${s.conf}%</div>
+          <div class="sl">▼ SL $${fmt2(s.sl)}</div>
         </div>
 
         <div class="row tp">
@@ -112,6 +131,16 @@
       `;
       cards.appendChild(card);
     }
+
+    // cập nhật summary
+    const wr = total? ((win/total)*100).toFixed(2)+'%':'0%';
+    const rrAvg = rrN? (rrSum/rrN).toFixed(2) : '0.00';
+    document.getElementById('sumTotal').textContent = total;
+    document.getElementById('sumWin').textContent   = win;
+    document.getElementById('sumLoss').textContent  = loss;
+    document.getElementById('sumExp').textContent   = exp;
+    document.getElementById('sumWR').textContent    = wr;
+    document.getElementById('sumRR').textContent    = rrAvg;
   }
 
   document.getElementById('refreshBtn').addEventListener('click', build);
