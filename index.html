@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signals — 15m, 100U×25</title>
+  <title>Danny Signals — 15m, 100U×25</title>
   <link rel="stylesheet" href="./assets/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,9 +13,9 @@
   <main class="wrap">
     <header class="topbar">
       <div class="brand">
-        <div class="logo">TB</div>
+        <div class="logo">DN</div>
         <div>
-          <div class="title">Titan-Style Signals</div>
+          <div class="title">Danny Signals</div>
           <div class="sub">15m • 100U×25 • Binance</div>
         </div>
       </div>
@@ -23,6 +23,16 @@
         <button id="refreshBtn" class="btn">Refresh</button>
       </div>
     </header>
+
+    <!-- SUMMARY -->
+    <section class="summary">
+      <div class="tile"><div class="k">Total</div><div id="sumTotal" class="v">0</div></div>
+      <div class="tile"><div class="k">Win (TP)</div><div id="sumWin" class="v">0</div></div>
+      <div class="tile"><div class="k">Loss (SL)</div><div id="sumLoss" class="v">0</div></div>
+      <div class="tile"><div class="k">Expired</div><div id="sumExp" class="v">0</div></div>
+      <div class="tile"><div class="k">WR%</div><div id="sumWR" class="v">0%</div></div>
+      <div class="tile"><div class="k">Avg RR</div><div id="sumRR" class="v">0.00</div></div>
+    </section>
 
     <section id="cards" class="cards"></section>
 
