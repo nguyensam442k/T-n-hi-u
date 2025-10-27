@@ -38,37 +38,29 @@
     <!-- SIGNAL CARDS -->
     <section id="cards" class="cards"></section>
 
+    <!-- ===== Order Log / Journal ===== -->
+    <section id="orderLog" class="log">
+      <h3>Order Log (Journal)</h3>
+      <div id="logSummary" class="log-summary"></div>
+      <div class="log-table-wrap">
+        <table id="logTable">
+          <thead>
+            <tr>
+              <th>Time</th><th>Symbol</th><th>Side</th><th>Conf</th>
+              <th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th>
+              <th>Status</th><th>Exit</th><th>PnL (25x)</th><th>RR</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
     <footer class="foot">Demo tĩnh • Nguồn giá: CryptoCompare (CCCAGG) • Không phải lời khuyên đầu tư.</footer>
   </main>
 
-  <!-- thêm version để tránh cache -->
-  <script src="./js/config.js?v=4"></script>
-  <script src="./js/ui.js?v=4"></script>
+  <!-- nhớ đổi version khi cập nhật để tránh cache -->
+  <script src="./js/config.js?v=6"></script>
+  <script src="./js/ui.js?v=6"></script>
 </body>
 </html>
-
-
-<section id="cards" class="cards"></section>
-
-<!-- ===== Order Log / Journal ===== -->
-<section id="orderLog" class="log">
-  <h3>Order Log (Journal)</h3>
-  <div id="logSummary" class="log-summary"></div>
-  <div class="log-table-wrap">
-    <table id="logTable">
-      <thead>
-        <tr>
-          <th>Time</th><th>Symbol</th><th>Side</th><th>Conf</th>
-          <th>Entry</th><th>SL</th><th>TP1</th><th>TP2</th><th>TP3</th>
-          <th>Status</th><th>Exit</th><th>PnL (25x)</th><th>RR</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
-
-<footer class="foot">Demo tĩnh • Nguồn giá: CryptoCompare (CCCAGG) • Không phải lời khuyên đầu tư.</footer>
-
-<script src="./js/config.js?v=6"></script>
-<script src="./js/ui.js?v=6"></script>
