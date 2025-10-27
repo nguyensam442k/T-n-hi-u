@@ -1,6 +1,7 @@
 (function(){
   const {CONFIG, getKlines, EMA, RSI, Stoch, ATR, expiryBars, fmt2, showError} = window.App;
 
+  // ====== Notifier (optional) ======
   const LAST_SEEN = {};
   function alertSignal(sym, s) {
     try {
@@ -12,6 +13,7 @@
     } catch(e){}
   }
 
+  // ====== Strategy m15 ======
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]), e200=EMA(C, CONFIG.ema[2]);
@@ -20,9 +22,10 @@
     const atr=ATR(H,L,C, CONFIG.atr);
 
     const out=[];
-    for(let i=200;i<bars.length;i++){
-      const up=e21[i]>e50[i]&&e50[i]>e200[i];
-      const dn=e21[i]<e50[i]&&e50[i]<e200[i];
+    const start = Math.max(200, CONFIG.ema[2]); // đảm bảo đủ warmup EMA200
+    for(let i=start;i<bars.length;i++){
+      const up = e21[i]>e50[i] && e50[i]>e200[i];
+      const dn = e21[i]<e50[i] && e50[i]<e200[i];
       const crossUp   = K[i-1]!=null && D[i-1]!=null && K[i-1]<D[i-1] && K[i]>=D[i] && K[i]<60;
       const crossDown = K[i-1]!=null && D[i-1]!=null && K[i-1]>D[i-1] && K[i]<=D[i] && K[i]>40;
 
@@ -42,6 +45,7 @@
     return out;
   }
 
+  // ====== Backtest ngắn hạn cho 1 lệnh ======
   function simulate(s, bars){
     const qty = (CONFIG.risk.perTradeUSD * CONFIG.risk.leverage) / s.entry;
     const eBars = expiryBars();
@@ -84,7 +88,9 @@
       try{
         bars = await getKlines(sym, CONFIG.timeframe, CONFIG.candlesLimit);
         sigs = generateSignals(bars);
-      }catch(e){ showError(`${sym}: ${e.message||e}`); }
+      }catch(e){
+        showError(`${sym}: ${e.message||e}`);
+      }
 
       const card = document.createElement('div'); card.className='card';
       if(!bars || !bars.length){
@@ -149,6 +155,7 @@
       cards.appendChild(card);
     }
 
+    // Summary
     const wr = total? ((win/total)*100).toFixed(2)+'%':'0%';
     const rrAvg = rrN? (rrSum/rrN).toFixed(2) : '0.00';
     document.getElementById('sumTotal').textContent = total;
