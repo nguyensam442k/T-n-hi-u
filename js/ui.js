@@ -1,13 +1,12 @@
 (function(){
   const {CONFIG, getKlines, EMA, RSI, Stoch, ATR, expiryBars, fmt2} = window.App;
 
-  // Rule: BUY/SELL theo EMA stack + RSI + Stoch cross (như bản trước)
+  // ==== Strategy (như trước, cho m15) ====
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]), e200=EMA(C, CONFIG.ema[2]);
-    const rsi=(window.App.RSI||(()=>[]))(C, CONFIG.rsiPeriod);
-    const st = Stoch(H,L,C, CONFIG.stoch?.[0]||14, CONFIG.stoch?.[1]||3);
-    const K=st.k, D=st.d;
+    const rsi=RSI(C, CONFIG.rsiPeriod);
+    const {k:K,d:D}=Stoch(H,L,C, CONFIG.stoch?.[0]||14, CONFIG.stoch?.[1]||3);
     const atr=ATR(H,L,C, CONFIG.atr);
 
     const out=[];
@@ -33,7 +32,7 @@
     return out;
   }
 
-  // mô phỏng: trả về TP / SL / EXPIRED + PnL + RR thực tế
+  // mô phỏng: TP / SL / EXPIRED + PnL + RR
   function simulate(s, bars){
     const qty = (CONFIG.risk.perTradeUSD * CONFIG.risk.leverage) / s.entry; // 100×25
     const eBars = expiryBars();
@@ -62,32 +61,33 @@
         return {status:'TP', when, qty, pnl, rr, filled:hit};
       }
     }
-    // HẾT HẠN
     return {status:'EXPIRED', when:Math.min(s.i+eBars,bars.length-1), qty, pnl:0, rr:0, filled:hit};
   }
+
+  const fmtMoney = (x)=> (x>=0?'+':'−') + '$' + fmt2(Math.abs(x));
 
   async function build(){
     const cards = document.getElementById('cards');
     cards.innerHTML = '';
 
     // summary counters
-    let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0;
+    let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0, pnlSum=0;
 
     for(const sym of CONFIG.symbols){
       const bars = await getKlines(sym, CONFIG.timeframe, CONFIG.candlesLimit);
       const sigs = generateSignals(bars);
 
-      // ====== thống kê từ các tín hiệu gần đây (lấy ~30 cái cuối)
+      // ====== thống kê (30 tín hiệu gần nhất mỗi symbol)
       const recent = sigs.slice(-30);
       for(const s of recent){
         const sr = simulate(s, bars);
         total++;
-        if(sr.status==='TP'){ win++; rrSum+=sr.rr; rrN++; }
-        else if(sr.status==='SL'){ loss++; rrSum+=sr.rr; rrN++; }
+        if(sr.status==='TP'){ win++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++; }
+        else if(sr.status==='SL'){ loss++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++; }
         else { exp++; }
       }
 
-      // ====== hiển thị CARD bằng tín hiệu mới nhất
+      // ====== hiển thị CARD với tín hiệu mới nhất
       const s = sigs.length ? sigs[sigs.length-1] : null;
       const last = bars[bars.length-1].c;
 
@@ -112,7 +112,7 @@
           <div class="kv"><div class="k">CURRENT</div><div class="v">$${fmt2(last)}</div></div>
           <div class="kv"><div class="k">TIME</div><div class="v">15m</div></div>
           <div class="kv"><div class="k">P&L %</div><div class="v ${pnlPct>=0?'pct-pos':'pct-neg'}">${pnlPct.toFixed(2)}%</div></div>
-          <div class="kv"><div class="k">PROFIT (25x)</div><div class="v ${pnlTag}">${r.pnl>=0?'+':''}$${fmt2(r.pnl)}</div></div>
+          <div class="kv"><div class="k">PROFIT (25x)</div><div class="v ${pnlTag}">${r.pnl>=0?'+':'−'}$${fmt2(Math.abs(r.pnl))}</div></div>
           <div class="kv"><div class="k">STATUS</div><div class="v"><span class="status">${r.status}</span></div></div>
         </div>
 
@@ -132,7 +132,7 @@
       cards.appendChild(card);
     }
 
-    // cập nhật summary
+    // cập nhật summary (WR, Avg RR, Total PnL)
     const wr = total? ((win/total)*100).toFixed(2)+'%':'0%';
     const rrAvg = rrN? (rrSum/rrN).toFixed(2) : '0.00';
     document.getElementById('sumTotal').textContent = total;
@@ -141,6 +141,10 @@
     document.getElementById('sumExp').textContent   = exp;
     document.getElementById('sumWR').textContent    = wr;
     document.getElementById('sumRR').textContent    = rrAvg;
+
+    const sumEl = document.getElementById('sumPnL');
+    sumEl.textContent = (pnlSum>=0?'+':'−') + '$' + fmt2(Math.abs(pnlSum));
+    sumEl.style.color = pnlSum>=0 ? 'var(--green)' : 'var(--red)';
   }
 
   document.getElementById('refreshBtn').addEventListener('click', build);
