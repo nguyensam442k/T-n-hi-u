@@ -1,7 +1,23 @@
 (function(){
   const {CONFIG, getKlines, EMA, RSI, Stoch, ATR, expiryBars, fmt2} = window.App;
 
-  // ==== Strategy (như trước, cho m15) ====
+  // ===== Notifier =====
+  const LAST_SEEN = {}; // lưu nến index cuối đã báo theo symbol
+  function alertSignal(sym, s) {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification(`Danny: ${sym} • ${s.side}`, {
+          body: `Entry ${s.entry.toFixed(2)} | SL ${s.sl.toFixed(2)} | TP1 ${s.tp[0].toFixed(2)}`
+        });
+      }
+      const beep = new Audio(
+        'data:audio/wav;base64,UklGRhQAAABXQVZFZm10IBAAAAABAAEAESsAACJWAAACABAAZGF0YQgAAAAA////AP///wD///8A'
+      );
+      beep.play().catch(()=>{});
+    } catch(e){}
+  }
+
+  // ===== Strategy (m15) =====
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema[0]), e50=EMA(C, CONFIG.ema[1]), e200=EMA(C, CONFIG.ema[2]);
@@ -32,7 +48,7 @@
     return out;
   }
 
-  // mô phỏng: TP / SL / EXPIRED + PnL + RR
+  // mô phỏng 1 lệnh: trả TP/SL/EXPIRED + PnL + RR
   function simulate(s, bars){
     const qty = (CONFIG.risk.perTradeUSD * CONFIG.risk.leverage) / s.entry; // 100×25
     const eBars = expiryBars();
@@ -70,14 +86,21 @@
     const cards = document.getElementById('cards');
     cards.innerHTML = '';
 
-    // summary counters
+    // summary
     let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0, pnlSum=0;
 
     for(const sym of CONFIG.symbols){
       const bars = await getKlines(sym, CONFIG.timeframe, CONFIG.candlesLimit);
       const sigs = generateSignals(bars);
 
-      // ====== thống kê (30 tín hiệu gần nhất mỗi symbol)
+      // detect new signal → notify (bỏ qua lần đầu)
+      const latest = sigs.length ? sigs[sigs.length-1] : null;
+      if (latest && LAST_SEEN[sym] !== latest.i) {
+        if (LAST_SEEN[sym] !== undefined) alertSignal(sym, latest);
+        LAST_SEEN[sym] = latest.i;
+      }
+
+      // thống kê ~30 tín hiệu gần đây
       const recent = sigs.slice(-30);
       for(const s of recent){
         const sr = simulate(s, bars);
@@ -87,11 +110,11 @@
         else { exp++; }
       }
 
-      // ====== hiển thị CARD với tín hiệu mới nhất
-      const s = sigs.length ? sigs[sigs.length-1] : null;
+      // card hiển thị dùng tín hiệu mới nhất
+      const s = latest;
       const last = bars[bars.length-1].c;
-
       const card = document.createElement('div'); card.className='card';
+
       if(!s){
         card.innerHTML = `<div class="head"><div class="asset"><div class="sym">${sym.replace('USDT','')}</div><span class="badge">m15</span></div><div class="badge">Last: $${fmt2(last)}</div></div><div style="color:#93a4bf">Không có tín hiệu gần đây.</div>`;
         cards.appendChild(card); continue;
@@ -112,7 +135,7 @@
           <div class="kv"><div class="k">CURRENT</div><div class="v">$${fmt2(last)}</div></div>
           <div class="kv"><div class="k">TIME</div><div class="v">15m</div></div>
           <div class="kv"><div class="k">P&L %</div><div class="v ${pnlPct>=0?'pct-pos':'pct-neg'}">${pnlPct.toFixed(2)}%</div></div>
-          <div class="kv"><div class="k">PROFIT (25x)</div><div class="v ${pnlTag}">${r.pnl>=0?'+':'−'}$${fmt2(Math.abs(r.pnl))}</div></div>
+          <div class="kv"><div class="k">PROFIT (25x)</div><div class="v ${pnlTag}">${fmtMoney(r.pnl)}</div></div>
           <div class="kv"><div class="k">STATUS</div><div class="v"><span class="status">${r.status}</span></div></div>
         </div>
 
@@ -132,7 +155,7 @@
       cards.appendChild(card);
     }
 
-    // cập nhật summary (WR, Avg RR, Total PnL)
+    // update summary
     const wr = total? ((win/total)*100).toFixed(2)+'%':'0%';
     const rrAvg = rrN? (rrSum/rrN).toFixed(2) : '0.00';
     document.getElementById('sumTotal').textContent = total;
@@ -141,12 +164,18 @@
     document.getElementById('sumExp').textContent   = exp;
     document.getElementById('sumWR').textContent    = wr;
     document.getElementById('sumRR').textContent    = rrAvg;
-
     const sumEl = document.getElementById('sumPnL');
     sumEl.textContent = (pnlSum>=0?'+':'−') + '$' + fmt2(Math.abs(pnlSum));
     sumEl.style.color = pnlSum>=0 ? 'var(--green)' : 'var(--red)';
   }
 
   document.getElementById('refreshBtn').addEventListener('click', build);
+
+  // xin quyền notification & auto refresh 60s
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+  setInterval(build, 60 * 1000);
+
   build();
 })();
