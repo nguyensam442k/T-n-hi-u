@@ -36,4 +36,16 @@ body{background:var(--bg); color:var(--text); font-family:Inter,system-ui,-apple
 .status{border:1px dashed #fda4af;color:#fda4af;border-radius:999px;padding:6px 10px;font-weight:700}
 .foot{margin-top:18px;color:var(--muted);font-size:12px;text-align:center}
 @media(max-width:1100px){.summary{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:900px){.kgrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:900px){.kgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.log{margin-top:24px}
+.log h3{margin:6px 0 12px}
+.log-summary{color:var(--muted);margin-bottom:8px}
+.log-table-wrap{overflow:auto;border:1px solid var(--border);border-radius:10px}
+#logTable{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel)}
+#logTable th,#logTable td{padding:8px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
+#logTable thead th{position:sticky;top:0;background:#0f192f;z-index:1}
+#logTable tbody tr:hover{background:rgba(255,255,255,0.03)}
+.pnl-pos{color:var(--green);font-weight:700}
+.pnl-neg{color:var(--red);font-weight:700}
+.badge-live{border:1px solid #f59e0b;color:#f59e0b;border-radius:999px;padding:2px 8px;font-size:11px}
+
