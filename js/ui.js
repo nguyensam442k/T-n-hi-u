@@ -1,5 +1,7 @@
 (function(){
-  const {CONFIG, getKlines, EMA, ATR, RSI, Stoch, MACD, expiryBars, fmt2, showError} = window.App;
+  const {
+    CONFIG, getKlines, EMA, ATR, RSI, Stoch, MACD, expiryBars, fmt2, showError, sessionStartTsLocal
+  } = window.App;
 
   // ===== utils / storage =====
   const LS_KEY = 'danny_order_log';
@@ -7,10 +9,15 @@
   const saveLog=(x)=>localStorage.setItem(LS_KEY,JSON.stringify(x));
   const fmtMoney = (x)=> (x>=0?'+':'−') + '$' + fmt2(Math.abs(x));
 
+  // prune log theo mốc session
+  function pruneLog(startTs){
+    const log = loadLog().filter(r => new Date(r.time).getTime() >= startTs);
+    saveLog(log);
+  }
+
   // ===== ICT helpers =====
   function swingHigh(H,i,n){return i>=n && i+n<H.length && H.slice(i-n,i).every(x=>x<H[i]) && H.slice(i+1,i+n+1).every(x=>x<H[i]);}
   function swingLow (L,i,n){return i>=n && i+n<L.length && L.slice(i-n,i).every(x=>x>L[i]) && L.slice(i+1,i+n+1).every(x=>x>L[i]);}
-
   function lastStructure(H,L,i,look,sn){
     const sH=[], sL=[];
     for(let k=Math.max(0,i-look);k<=i;k++){
@@ -24,12 +31,8 @@
     const dn = hh.p<ph.p && ll.p<pl.p;
     return {dir: up?'UP':(dn?'DOWN':null),sH,sL,hh,ll};
   }
-  function bosUp(C,H,i,tol, sH){
-    if(!sH?.length) return null; const ref=sH[sH.length-1].p; return (C[i]>ref*(1+tol))?ref:null;
-  }
-  function bosDown(C,L,i,tol, sL){
-    if(!sL?.length) return null; const ref=sL[sL.length-1].p; return (C[i]<ref*(1-tol))?ref:null;
-  }
+  function bosUp(C,H,i,tol, sH){ if(!sH?.length) return null; const ref=sH[sH.length-1].p; return (C[i]>ref*(1+tol))?ref:null; }
+  function bosDown(C,L,i,tol, sL){ if(!sL?.length) return null; const ref=sL[sL.length-1].p; return (C[i]<ref*(1-tol))?ref:null; }
   function findFVG(H,L,dir,iStart,look){
     for(let i=iStart;i>=Math.max(2,iStart-look);i--){
       if(dir==='UP'){ if (L[i] > H[i-2])  return {i:i-2, hi:H[i-2], lo:L[i], mid:(H[i-2]+L[i])/2}; }
@@ -51,7 +54,7 @@
     else          { const hiRef =Math.max(...H.slice(i-w,i)); return (H[i]>hiRef)&&(C[i]<H[i]); }
   }
 
-  // ===== Strategy: ICT-first (EMA21+Stoch timing + MACD confirm) =====
+  // ===== Strategy ICT-first =====
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema21), atr=ATR(H,L,C, CONFIG.atr), rsi=RSI(C,14);
@@ -59,16 +62,20 @@
     const {hist}   = MACD(C, CONFIG.macd.fast, CONFIG.macd.slow, CONFIG.macd.sig);
 
     const ict=CONFIG.ict, flt=CONFIG.filters;
-    const out=[], start=Math.max(220, ict.structureLookback);
+    const startSwing=Math.max(220, ict.structureLookback);
 
-    for(let i=start;i<bars.length;i++){
-      // 1) BOS
+    // index bắt đầu theo mốc session
+    const startTs = sessionStartTsLocal();
+    const startIdx = bars.findIndex(b => b.t >= startTs);
+    const begin = Math.max(startSwing, startIdx === -1 ? startSwing : startIdx);
+
+    const out=[];
+    for(let i=begin;i<bars.length;i++){
       const st = lastStructure(H,L,i-1, ict.structureLookback, ict.swingLen);
       const upRef = bosUp(C,H,i, ict.bosTolerance, st.sH);
       const dnRef = bosDown(C,L,i, ict.bosTolerance, st.sL);
       let dir=null; if(upRef) dir='UP'; else if(dnRef) dir='DOWN'; else continue;
 
-      // 2) Zone (FVG -> OB)
       let zone=null;
       if(dir==='UP' && ict.useFVG) zone = findFVG(H,L,'UP',i,ict.fvgLookback);
       if(dir==='UP' && !zone && ict.useOB) zone = findOB(H,L,C,'UP',i,ict.obLookback);
@@ -76,7 +83,6 @@
       if(dir==='DOWN'&& !zone && ict.useOB) zone = findOB(H,L,C,'DOWN',i,ict.obLookback);
       if(!zone) continue;
 
-      // 3) retest về zone
       let hit=null, end=Math.min(i+ict.retestBarsMax, bars.length-1);
       for(let k=i+1;k<=end;k++){
         const level = ict.entryMode==='mitigation' ? zone.mid : (dir==='UP'? zone.lo : zone.hi);
@@ -86,11 +92,8 @@
         if(inZone){ hit=k; break; }
       }
       if(hit==null) continue;
-
-      // 4) sweep yêu cầu
       if(ict.allowSweepEntry && !hadSweep(H,L,C,dir,hit)) continue;
 
-      // 5) Filters phụ
       if(flt.useEMA){
         const slope = e21[hit]-e21[hit-2];
         if(dir==='UP'   && !(C[hit]>=e21[hit] && slope>0)) continue;
@@ -114,37 +117,28 @@
         if(dir==='DOWN' && !(hist[hit]<=0)) continue;
       }
 
-      // 6) Entry/SL/TP
       const a = atr[hit]||0;
       let entry, sl;
-      if(dir==='UP'){
-        entry = Math.min(C[hit], ict.entryMode==='mitigation'? zone.mid : C[hit]);
-        sl    = Math.min(zone.lo, entry - CONFIG.slATR*a);
-      }else{
-        entry = Math.max(C[hit], ict.entryMode==='mitigation'? zone.mid : C[hit]);
-        sl    = Math.max(zone.hi, entry + CONFIG.slATR*a);
-      }
-      const risk = Math.max(dir==='UP'? (entry-sl) : (sl-entry), 1e-8);
-      const tp = CONFIG.tpR.map(R => dir==='UP'? entry + R*risk : entry - R*risk);
+      if(dir==='UP'){ entry=Math.min(C[hit], ict.entryMode==='mitigation'?zone.mid:C[hit]); sl=Math.min(zone.lo, entry-CONFIG.slATR*a); }
+      else          { entry=Math.max(C[hit], ict.entryMode==='mitigation'?zone.mid:C[hit]); sl=Math.max(zone.hi, entry+CONFIG.slATR*a); }
+      const risk = Math.max(dir==='UP'? entry-sl : sl-entry, 1e-8);
+      const tp = CONFIG.tpR.map(R => dir==='UP'? entry+R*risk : entry-R*risk);
 
-      // 7) confidence
       let conf = 60 + (flt.useEMA?6:0) + (flt.useStoch?6:0) + (flt.useMACD?6:0) + (ict.allowSweepEntry?6:0);
       conf = Math.min(100, Math.max(40, Math.round(conf)));
 
-      out.push({ i:hit, side: dir==='UP'?'BUY':'SELL', entry, sl, tp, conf,
-                 ict:{dir, bosAt:i, zone} });
+      out.push({ i:hit, side: dir==='UP'?'BUY':'SELL', entry, sl, tp, conf, ict:{dir, bosAt:i, zone} });
     }
     return out;
   }
 
-  // fallback tạo 1 kèo LIVE tối giản nếu chưa có
+  // fallback tạo 1 kèo LIVE nếu chưa có
   function ensureLiveSignal(bars, sigs){
     if(sigs.length && sigs[sigs.length-1].i===bars.length-1) return sigs[sigs.length-1];
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
     const e21=EMA(C, CONFIG.ema21), atr=ATR(H,L,C, CONFIG.atr);
-    const {k:K,d:D}=Stoch(H,L,C, CONFIG.stoch.k, CONFIG.stoch.d, CONFIG.stoch.smooth);
     const i=bars.length-1;
-    const side = (C[i]>=e21[i] && K[i]>=D[i]) ? 'BUY':'SELL';
+    const side = (C[i]>=e21[i]) ? 'BUY':'SELL';
     const a=atr[i]||0, entry=C[i], sl = side==='BUY'? entry-CONFIG.slATR*a : entry+CONFIG.slATR*a;
     const risk = Math.max(side==='BUY'? entry-sl : sl-entry, 1e-8);
     const tp = CONFIG.tpR.map(R => side==='BUY'? entry+R*risk : entry-R*risk);
@@ -228,16 +222,19 @@
   }
 
   // order log
-  function upsertOrderLog(symbol, s, sim){
-    const log=loadLog(); const id=`${symbol}-${s.i}`; const ix=log.findIndex(x=>x.id===id);
+  function upsertOrderLog(symbol, s, sim, barTime){
+    const log=loadLog(); const id=`${symbol}-${barTime}`; const ix=log.findIndex(x=>x.id===id);
     const exitPrice = (sim.status==='TP') ? s.tp[(sim.filled?.[2]?2:sim.filled?.[1]?1:0)]
                      : (sim.status==='SL' ? s.sl : null);
-    const row={ id, time: new Date(barsTime(s.i) || Date.now()).toISOString(), symbol, side:s.side, conf:s.conf,
-      entry:s.entry, sl:s.sl, tp1:s.tp[0], tp2:s.tp[1], tp3:s.tp[2], status:sim.status, exit:exitPrice, pnl:sim.pnl, rr:sim.rr };
+    const row={ id, time: new Date(barTime).toISOString(), symbol, side:s.side, conf:s.conf,
+      entry:s.entry, sl:s.sl, tp1:s.tp[0], tp2:s.tp[1], tp3:s.tp[2],
+      status:sim.status, exit:exitPrice, pnl:sim.pnl, rr:sim.rr };
     if(ix>=0) log[ix]=row; else log.push(row); saveLog(log);
   }
   function renderOrderLog(){
-    const log = loadLog().sort((a,b)=>new Date(b.time)-new Date(a.time));
+    const startTs = sessionStartTsLocal();
+    const log = loadLog().filter(r => new Date(r.time).getTime() >= startTs)
+                         .sort((a,b)=>new Date(b.time)-new Date(a.time));
     const tb = document.querySelector('#logTable tbody'); tb.innerHTML='';
     let pnl=0,w=0,l=0,a=0,e=0;
     for(const r of log){
@@ -250,20 +247,23 @@
       tb.appendChild(tr);
     }
     document.getElementById('logSummary').textContent =
-      `Orders: ${log.length} • Win: ${w} • Loss: ${l} • Active: ${a} • Expired: ${e} • Total PnL (25x): ${fmtMoney(pnl)}`;
+      `Tính từ ${new Date(startTs).toLocaleString()} — Orders: ${log.length} • Win: ${w} • Loss: ${l} • Active: ${a} • Expired: ${e} • Total PnL (25x): ${fmtMoney(pnl)}`;
   }
 
-  // handy to map i -> time when bars cached in build()
+  // handy time array (để log theo đúng bar time)
   let _barsTime = [];
   const barsTime=(i)=>_barsTime[i];
 
   // ===== Build =====
   async function build(){
+    const startTs = sessionStartTsLocal();
+    pruneLog(startTs);
+
     let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0, pnlSum=0;
     const cards=document.getElementById('cards'); cards.innerHTML='';
     const skels={}; for(const sym of CONFIG.symbols){ const s=skeletonCard(sym.replace('USDT','')); skels[sym]=s; cards.appendChild(s); }
 
-    _barsTime = []; // reset
+    _barsTime = [];
 
     for(const sym of CONFIG.symbols){
       const symShort=sym.replace('USDT','');
@@ -274,15 +274,15 @@
         let sigs=generateSignals(bars);
         const latest = ensureLiveSignal(bars, sigs);
 
-        // backtest stats (narrow) or live-only
-        const list = (CONFIG.mode==='live') ? [latest] : (sigs.length?sigs.slice(-30):[latest]);
+        // chỉ thống kê từ mốc session
+        const list = (CONFIG.mode==='live') ? [latest] : sigs.filter(s=>bars[s.i].t >= startTs);
         for(const s of list){
           const sr=simulate(s,bars);
           total++; if(sr.status==='TP'){win++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++;} else if(sr.status==='SL'){loss++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++;} else {exp++;}
         }
 
         const sim = simulate(latest,bars);
-        upsertOrderLog(symShort, latest, sim);
+        upsertOrderLog(symShort, latest, sim, bars[latest.i].t);
 
         const card=renderCard(symShort,bars,latest,sim);
         cards.replaceChild(card, skels[sym]);
@@ -293,40 +293,29 @@
       }
     }
 
-    // Summary
-    if(CONFIG.mode==='live'){
-      const log=loadLog(); const wins=log.filter(x=>x.status==='TP').length;
-      const los =log.filter(x=>x.status==='SL').length;
-      const exd =log.filter(x=>x.status==='EXPIRED').length;
-      const act =log.filter(x=>x.status==='ACTIVE').length;
-      const pnl =log.reduce((s,x)=>s+(x.pnl||0),0);
+    // Summary (từ mốc session)
+    const log=loadLog().filter(r => new Date(r.time).getTime() >= startTs);
+    const wins=log.filter(x=>x.status==='TP').length;
+    const los =log.filter(x=>x.status==='SL').length;
+    const exd =log.filter(x=>x.status==='EXPIRED').length;
+    const act =log.filter(x=>x.status==='ACTIVE').length;
+    const pnl =log.reduce((s,x)=>s+(x.pnl||0),0);
 
-      document.getElementById('sumTotal').textContent=wins+los+exd+act;
-      document.getElementById('sumWin').textContent=wins;
-      document.getElementById('sumLoss').textContent=los;
-      document.getElementById('sumExp').textContent=exd;
-      document.getElementById('sumWR').textContent=(wins+los>0?((wins/(wins+los))*100).toFixed(2):'0')+'%';
-      document.getElementById('sumRR').textContent='—';
-      const el=document.getElementById('sumPnL'); el.textContent=(pnl>=0?'+':'−')+'$'+fmt2(Math.abs(pnl)); el.style.color=pnl>=0?'var(--green)':'var(--red)';
-    }else{
-      const wr = total? ((win/total)*100).toFixed(2)+'%':'0%';
-      const rrAvg = rrN? (rrSum/rrN).toFixed(2) : '0.00';
-      document.getElementById('sumTotal').textContent=total;
-      document.getElementById('sumWin').textContent=win;
-      document.getElementById('sumLoss').textContent=loss;
-      document.getElementById('sumExp').textContent=exp;
-      document.getElementById('sumWR').textContent=wr;
-      document.getElementById('sumRR').textContent=rrAvg;
-      const el=document.getElementById('sumPnL'); el.textContent=(pnlSum>=0?'+':'−')+'$'+fmt2(Math.abs(pnlSum)); el.style.color=pnlSum>=0?'var(--green)':'var(--red)';
-    }
+    document.getElementById('sumTotal').textContent=wins+los+exd+act;
+    document.getElementById('sumWin').textContent=wins;
+    document.getElementById('sumLoss').textContent=los;
+    document.getElementById('sumExp').textContent=exd;
+    document.getElementById('sumWR').textContent=(wins+los>0?((wins/(wins+los))*100).toFixed(2):'0')+'%';
+    document.getElementById('sumRR').textContent='—';
+    const el=document.getElementById('sumPnL'); el.textContent=(pnl>=0?'+':'−')+'$'+fmt2(Math.abs(pnl)); el.style.color=pnl>=0?'var(--green)':'var(--red)';
 
     renderOrderLog();
   }
 
-  // ===== Binance WS for CURRENT/PnL (optional) =====
+  // ===== Binance WS for CURRENT/PnL (optional live update) =====
   if (CONFIG.useBinanceWS){
     try{
-      const streams=CONFIG.symbols.map(s=>s.toLowerCase().replace('usdt','usdt@miniTicker')).join('/');
+      const streams=CONFIG.symbols.map(s=>s.toLowerCase()+ '@miniTicker').join('/');
       const ws=new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
       ws.onmessage=(ev)=>{
         const m=JSON.parse(ev.data); if(!m?.data?.c||!m?.stream) return;
