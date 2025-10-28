@@ -1,15 +1,15 @@
 (function(){
   const {
-    CONFIG, getKlines, EMA, ATR, RSI, Stoch, MACD, expiryBars, fmt2, showError, sessionStartTsLocal
+    CONFIG, getKlines, EMA, ATR, RSI, Stoch, expiryBars, fmt2, showError, sessionStartTsLocal
   } = window.App;
 
-  // ===== utils / storage =====
+  // ===== storage =====
   const LS_KEY = 'danny_order_log';
   const loadLog=()=>{try{return JSON.parse(localStorage.getItem(LS_KEY)||'[]')}catch{return[]}}
   const saveLog=(x)=>localStorage.setItem(LS_KEY,JSON.stringify(x));
   const fmtMoney = (x)=> (x>=0?'+':'−') + '$' + fmt2(Math.abs(x));
 
-  // prune log theo mốc session
+  // prune theo mốc session
   function pruneLog(startTs){
     const log = loadLog().filter(r => new Date(r.time).getTime() >= startTs);
     saveLog(log);
@@ -54,17 +54,16 @@
     else          { const hiRef =Math.max(...H.slice(i-w,i)); return (H[i]>hiRef)&&(C[i]<H[i]); }
   }
 
-  // ===== Strategy ICT-first =====
+  // ===== Strategy ICT-first + EMA21 + Stoch + RSI
   function generateSignals(bars){
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
-    const e21=EMA(C, CONFIG.ema21), atr=ATR(H,L,C, CONFIG.atr), rsi=RSI(C,14);
+    const e21=EMA(C, CONFIG.ema21), atr=ATR(H,L,C, CONFIG.atr), rsi=RSI(C, CONFIG.rsi.period);
     const {k:K,d:D} = Stoch(H,L,C, CONFIG.stoch.k, CONFIG.stoch.d, CONFIG.stoch.smooth);
-    const {hist}   = MACD(C, CONFIG.macd.fast, CONFIG.macd.slow, CONFIG.macd.sig);
 
     const ict=CONFIG.ict, flt=CONFIG.filters;
     const startSwing=Math.max(220, ict.structureLookback);
 
-    // index bắt đầu theo mốc session
+    // bắt đầu từ mốc session
     const startTs = sessionStartTsLocal();
     const startIdx = bars.findIndex(b => b.t >= startTs);
     const begin = Math.max(startSwing, startIdx === -1 ? startSwing : startIdx);
@@ -94,6 +93,7 @@
       if(hit==null) continue;
       if(ict.allowSweepEntry && !hadSweep(H,L,C,dir,hit)) continue;
 
+      // === Filters ===
       if(flt.useEMA){
         const slope = e21[hit]-e21[hit-2];
         if(dir==='UP'   && !(C[hit]>=e21[hit] && slope>0)) continue;
@@ -112,11 +112,13 @@
           if(!ok) continue;
         }
       }
-      if(flt.useMACD){
-        if(dir==='UP'   && !(hist[hit]>=0)) continue;
-        if(dir==='DOWN' && !(hist[hit]<=0)) continue;
+      if(flt.useRSI){
+        const slope = rsi[hit]-rsi[hit-2];
+        if(dir==='UP'   && !(rsi[hit] >= CONFIG.rsi.buyMin  && slope>0)) continue;
+        if(dir==='DOWN' && !(rsi[hit] <= CONFIG.rsi.sellMax && slope<0)) continue;
       }
 
+      // === Build order ===
       const a = atr[hit]||0;
       let entry, sl;
       if(dir==='UP'){ entry=Math.min(C[hit], ict.entryMode==='mitigation'?zone.mid:C[hit]); sl=Math.min(zone.lo, entry-CONFIG.slATR*a); }
@@ -124,7 +126,7 @@
       const risk = Math.max(dir==='UP'? entry-sl : sl-entry, 1e-8);
       const tp = CONFIG.tpR.map(R => dir==='UP'? entry+R*risk : entry-R*risk);
 
-      let conf = 60 + (flt.useEMA?6:0) + (flt.useStoch?6:0) + (flt.useMACD?6:0) + (ict.allowSweepEntry?6:0);
+      let conf = 60 + (flt.useEMA?8:0) + (flt.useStoch?8:0) + (flt.useRSI?8:0) + (ict.allowSweepEntry?6:0);
       conf = Math.min(100, Math.max(40, Math.round(conf)));
 
       out.push({ i:hit, side: dir==='UP'?'BUY':'SELL', entry, sl, tp, conf, ict:{dir, bosAt:i, zone} });
@@ -132,7 +134,7 @@
     return out;
   }
 
-  // fallback tạo 1 kèo LIVE nếu chưa có
+  // fallback live
   function ensureLiveSignal(bars, sigs){
     if(sigs.length && sigs[sigs.length-1].i===bars.length-1) return sigs[sigs.length-1];
     const C=bars.map(b=>b.c), H=bars.map(b=>b.h), L=bars.map(b=>b.l);
@@ -146,37 +148,38 @@
     sigs.push(s); return s;
   }
 
-  // ===== Simulate / PnL =====
+  // ===== simulate =====
   function simulate(s,bars){
     const qty = (CONFIG.risk.perTradeUSD * CONFIG.risk.leverage) / s.entry;
     const eBars = expiryBars();
     const riskAbs = Math.abs((s.side==='BUY'? (s.entry-s.sl):(s.sl-s.entry))*qty);
-    let hit=[0,0,0], when=s.i;
+    let hit=[0,0,0];
 
     for(let j=s.i+1;j<bars.length && j<=s.i+eBars;j++){
-      const b=bars[j]; when=j;
+      const b=bars[j];
       if(s.side==='BUY'){
-        if(b.l<=s.sl) return {status:'SL',when,qty,pnl:-riskAbs,rr:-1,filled:hit};
+        if(b.l<=s.sl) return {status:'SL',qty,pnl:-riskAbs,rr:-1,filled:hit};
         if(!hit[0]&&b.h>=s.tp[0]) hit[0]=1; if(!hit[1]&&b.h>=s.tp[1]) hit[1]=1; if(!hit[2]&&b.h>=s.tp[2]) hit[2]=1;
       }else{
-        if(b.h>=s.sl) return {status:'SL',when,qty,pnl:-riskAbs,rr:-1,filled:hit};
+        if(b.h>=s.sl) return {status:'SL',qty,pnl:-riskAbs,rr:-1,filled:hit};
         if(!hit[0]&&b.l<=s.tp[0]) hit[0]=1; if(!hit[1]&&b.l<=s.tp[1]) hit[1]=1; if(!hit[2]&&b.l<=s.tp[2]) hit[2]=1;
       }
       if(hit[0]||hit[1]||hit[2]){
         const w=CONFIG.tpSplit||[0.3,0.3,0.4]; let pnl=0;
         for(let k=0;k<3;k++) if(hit[k]) pnl += (s.side==='BUY'?(s.tp[k]-s.entry):(s.entry-s.tp[k]))*qty*w[k];
         const rr=riskAbs>0?pnl/riskAbs:0;
-        return {status:'TP',when:j,qty,pnl,rr,filled:hit};
+        return {status:'TP',qty,pnl,rr,filled:hit};
       }
     }
+    // nếu chưa hết hạn => ACTIVE
     const lastIdx = bars.length-1;
     if(lastIdx < (s.i + eBars)){
       const last = bars[lastIdx].c;
       const pnl  = (s.side==='BUY' ? (last - s.entry) : (s.entry - last)) * qty;
       const rr   = riskAbs>0 ? pnl/riskAbs : 0;
-      return {status:'ACTIVE',when:lastIdx,qty,pnl,rr,filled:hit};
+      return {status:'ACTIVE',qty,pnl,rr,filled:hit};
     }
-    return {status:'EXPIRED',when:Math.min(s.i+eBars,bars.length-1),qty,pnl:0,rr:0,filled:hit};
+    return {status:'EXPIRED',qty,pnl:0,rr:0,filled:hit};
   }
 
   // ===== UI =====
@@ -250,7 +253,6 @@
       `Tính từ ${new Date(startTs).toLocaleString()} — Orders: ${log.length} • Win: ${w} • Loss: ${l} • Active: ${a} • Expired: ${e} • Total PnL (25x): ${fmtMoney(pnl)}`;
   }
 
-  // handy time array (để log theo đúng bar time)
   let _barsTime = [];
   const barsTime=(i)=>_barsTime[i];
 
@@ -259,7 +261,6 @@
     const startTs = sessionStartTsLocal();
     pruneLog(startTs);
 
-    let total=0, win=0, loss=0, exp=0, rrSum=0, rrN=0, pnlSum=0;
     const cards=document.getElementById('cards'); cards.innerHTML='';
     const skels={}; for(const sym of CONFIG.symbols){ const s=skeletonCard(sym.replace('USDT','')); skels[sym]=s; cards.appendChild(s); }
 
@@ -268,18 +269,11 @@
     for(const sym of CONFIG.symbols){
       const symShort=sym.replace('USDT','');
       try{
-        const bars=await getKlines(sym, CONFIG.timeframe, CONFIG.candlesLimit);
+        const bars=await getKlines(sym, CONFIG.timeframe);
         _barsTime = bars.map(b=>b.t);
 
         let sigs=generateSignals(bars);
         const latest = ensureLiveSignal(bars, sigs);
-
-        // chỉ thống kê từ mốc session
-        const list = (CONFIG.mode==='live') ? [latest] : sigs.filter(s=>bars[s.i].t >= startTs);
-        for(const s of list){
-          const sr=simulate(s,bars);
-          total++; if(sr.status==='TP'){win++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++;} else if(sr.status==='SL'){loss++; pnlSum+=sr.pnl; rrSum+=sr.rr; rrN++;} else {exp++;}
-        }
 
         const sim = simulate(latest,bars);
         upsertOrderLog(symShort, latest, sim, bars[latest.i].t);
@@ -293,26 +287,11 @@
       }
     }
 
-    // Summary (từ mốc session)
-    const log=loadLog().filter(r => new Date(r.time).getTime() >= startTs);
-    const wins=log.filter(x=>x.status==='TP').length;
-    const los =log.filter(x=>x.status==='SL').length;
-    const exd =log.filter(x=>x.status==='EXPIRED').length;
-    const act =log.filter(x=>x.status==='ACTIVE').length;
-    const pnl =log.reduce((s,x)=>s+(x.pnl||0),0);
-
-    document.getElementById('sumTotal').textContent=wins+los+exd+act;
-    document.getElementById('sumWin').textContent=wins;
-    document.getElementById('sumLoss').textContent=los;
-    document.getElementById('sumExp').textContent=exd;
-    document.getElementById('sumWR').textContent=(wins+los>0?((wins/(wins+los))*100).toFixed(2):'0')+'%';
-    document.getElementById('sumRR').textContent='—';
-    const el=document.getElementById('sumPnL'); el.textContent=(pnl>=0?'+':'−')+'$'+fmt2(Math.abs(pnl)); el.style.color=pnl>=0?'var(--green)':'var(--red)';
-
+    // Summary & log
     renderOrderLog();
   }
 
-  // ===== Binance WS for CURRENT/PnL (optional live update) =====
+  // ===== WS update CURRENT/PnL =====
   if (CONFIG.useBinanceWS){
     try{
       const streams=CONFIG.symbols.map(s=>s.toLowerCase()+ '@miniTicker').join('/');
