@@ -1,16 +1,21 @@
-// Danny Signals — 15m ICT/SMC + EMA21 + Stoch + MACD (CCCAGG)
+// Danny Signals — 15m ICT/SMC + EMA21 + Stoch + MACD (CCCAGG + Binance live merge)
 (function(){
   const CONFIG = {
     symbols: ['BTCUSDT','ETHUSDT','SOLUSDT'],
     timeframe: '15m',
-    candlesLimit: 600,                       // đủ dài để tính MACD/EMA/FVG
+    candlesLimit: 600,
     risk: { perTradeUSD: 100, leverage: 25 },
 
     // chế độ
-    mode: 'live',                            // 'live' | 'backtest'
-    useBinanceWS: true,                      // WS chỉ để cập nhật CURRENT/PnL
+    mode: 'live',              // 'live' | 'backtest'
+    useBinanceWS: true,
 
-    // chỉ số lõi/filters
+    // ===== phiên tính toán (LOCAL TIME) =====
+    session: {
+      startTodayHHmm: '01:15', // bắt đầu tính & log từ 01:15 hôm nay (giờ máy)
+    },
+
+    // chỉ số
     ema21: 21,
     atr: 14,
 
@@ -21,24 +26,21 @@
       bosTolerance: 0.0005,
       useFVG: true,  fvgLookback: 40,
       useOB:  true,  obLookback: 30,
-      entryMode: 'mitigation',       // 'mitigation' 50% vùng | 'touch'
+      entryMode: 'mitigation',
       allowSweepEntry: true,
       retestBarsMax: 20
     },
 
     // Filters phụ
     stoch: { k:14, d:3, smooth:3, buyZone:[20,60], sellZone:[40,80] },
-    macd:  { fast:12, slow:26, sig:9 },      // dùng histogram xác nhận/quản trị
-    filters: {
-      useEMA:true, useStoch:true, useMACD:true,
-      maxDistATR21: 1.2                     // tránh đuổi giá
-    },
+    macd:  { fast:12, slow:26, sig:9 },
+    filters: { useEMA:true, useStoch:true, useMACD:true, maxDistATR21: 1.2 },
 
     // Risk/RR/expiry
     slATR: 1.2,
     tpR: [1.0, 1.8, 2.6],
     tpSplit: [0.30,0.30,0.40],
-    expiryBars15m: 20
+    expiryBars15m: 20,
   };
 
   // ===== DEBUG banner =====
@@ -54,7 +56,7 @@
     console.warn('DEBUG:', msg);
   }
 
-  // ===== Data from CryptoCompare (minutes -> 15m) =====
+  // ======= CryptoCompare (minute) =======
   const ccBase = 'https://min-api.cryptocompare.com/data';
 
   async function fetchMinutesPaged(symbol, minutesNeeded){
@@ -65,16 +67,14 @@
     let toTs = undefined;
 
     while(data.length < minutesNeeded){
-      const url = `${ccBase}/histominute?fsym=${fsym}&tsym=${tsym}` +
-                  `&limit=${perCall}&aggregate=1&e=CCCAGG` + (toTs ? `&toTs=${toTs}` : '');
+      const url = `${ccBase}/histominute?fsym=${fsym}&tsym=${tsym}`+
+                  `&limit=${perCall}&aggregate=1&e=CCCAGG${toTs?`&toTs=${toTs}`:''}`;
       const r = await fetch(url);
       if(!r.ok) throw new Error('CC ' + r.status);
       const j = await r.json();
       if(j.Response==='Error') throw new Error(j.Message||'CC error');
-
       const arr = (j.Data && (j.Data.Data || j.Data)) || [];
       if(!arr.length) break;
-
       if(toTs===undefined) data.push(...arr); else data.unshift(...arr);
       toTs = arr[0].time - 1;
       if(data.length >= minutesNeeded) break;
@@ -93,14 +93,50 @@
     return Array.from(m.values()).sort((a,b)=>a.t-b.t);
   }
 
+  // ===== Binance last price (để ghép real-time) =====
+  async function fetchBinanceLast(symbol){
+    const url = `https://api.binance.com/api/v3/ticker/price?symbol=${symbol}`;
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('BN last ' + r.status);
+    const j = await r.json();
+    return parseFloat(j.price);
+  }
+
+  // hợp nhất: dùng last price cập nhật nến 15m hiện tại (hoặc tạo nến mới)
+  function mergeLivePrice15(bars15, lastPrice){
+    if(!bars15.length) return bars15;
+    const now = Date.now();
+    const bucket = Math.floor(now/900000)*900000; // 15m bucket
+    const lastBar = bars15[bars15.length-1];
+
+    if (lastBar.t < bucket){
+      // đã sang bucket mới -> tạo nến mới với giá live
+      bars15.push({ t: bucket, o:lastPrice, h:lastPrice, l:lastPrice, c:lastPrice, v:0 });
+    } else {
+      // cùng bucket -> cập nhật OHLC
+      lastBar.c = lastPrice;
+      lastBar.h = Math.max(lastBar.h, lastPrice);
+      lastBar.l = Math.min(lastBar.l, lastPrice);
+    }
+    return bars15;
+  }
+
   async function getKlines(symbol, interval='15m', limit15=600){
     if(interval!=='15m') throw new Error('Only 15m supported');
-    const warm = 80;                         // cho MACD/EMA/FVG
+    const warm = 100;
     const need = (limit15 + warm) * 15;
     const mins = await fetchMinutesPaged(symbol, need);
     showError(`OK CC ${symbol}: minutes=${mins.length}`);
-    const m15  = resample15(mins);
-    return m15.slice(-limit15);
+    let m15  = resample15(mins);
+    m15 = m15.slice(-limit15);
+
+    if (CONFIG.mode==='live'){
+      try{
+        const last = await fetchBinanceLast(symbol);
+        m15 = mergeLivePrice15(m15, last);
+      }catch(e){ console.warn('Live merge error', e); }
+    }
+    return m15;
   }
 
   // ===== Indicators =====
@@ -120,5 +156,16 @@
   function expiryBars(){ return CONFIG.expiryBars15m || 20 }
   const fmt2 = (x)=> (Math.round(x*100)/100).toFixed(2);
 
-  window.App = { CONFIG, showError, getKlines, SMA, EMA, RSI, Stoch, ATR, MACD, expiryBars, fmt2 };
+  // ===== session start (local) -> timestamp =====
+  function sessionStartTsLocal(){
+    const [hh,mm] = (CONFIG.session?.startTodayHHmm||'00:00').split(':').map(Number);
+    const d = new Date(); d.setHours(hh, mm, 0, 0);
+    return d.getTime();
+  }
+
+  window.App = {
+    CONFIG, showError, getKlines,
+    SMA, EMA, RSI, Stoch, ATR, MACD, expiryBars, fmt2,
+    sessionStartTsLocal
+  };
 })();
